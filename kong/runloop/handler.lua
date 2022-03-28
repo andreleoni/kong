@@ -9,7 +9,6 @@ local constants    = require "kong.constants"
 local singletons   = require "kong.singletons"
 local certificate  = require "kong.runloop.certificate"
 local concurrency  = require "kong.concurrency"
-local declarative  = require "kong.db.declarative"
 local workspaces   = require "kong.workspaces"
 local lrucache     = require "resty.lrucache"
 
@@ -362,15 +361,15 @@ local function register_events()
 
     worker_events.register(function(default_ws)
       if ngx.worker.exiting() then
-        log(NOTICE, "declarative flip config canceled: process exiting")
+        log(NOTICE, "declarative reconfigure canceled: process exiting")
         return true
       end
 
       local ok, err = concurrency.with_coroutine_mutex(FLIP_CONFIG_OPTS, function()
-        balancer.stop_healthcheckers(CLEAR_HEALTH_STATUS_DELAY)
+        kong.core_cache:purge()
+        kong.cache:purge()
 
-        kong.cache:flip()
-        core_cache:flip()
+        balancer.stop_healthcheckers(CLEAR_HEALTH_STATUS_DELAY)
 
         kong.default_workspace = default_ws
         ngx.ctx.workspace = kong.default_workspace
@@ -380,22 +379,18 @@ local function register_events()
 
         balancer.init()
 
-        declarative.lock()
-
         return true
       end)
 
       if not ok then
         log(ERR, "config flip failed: ", err)
       end
-    end, "declarative", "flip_config")
+    end, "declarative", "reconfigure")
 
     return
   end
 
-
   -- events dispatcher
-
 
   worker_events.register(function(data)
     if not data.schema then
